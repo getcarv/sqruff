@@ -4026,7 +4026,18 @@ pub fn raw_dialect() -> Dialect {
                 Sequence::new(vec![
                     Ref::keyword("ELSE").to_matchable(),
                     MetaSegment::implicit_indent().to_matchable(),
-                    Ref::new("ExpressionSegment").to_matchable(),
+                    // Reset terminators so that comparison operators (>=, <=, etc.)
+                    // within the ELSE expression are parsed correctly, rather than
+                    // being treated as terminators of the parent CASE expression.
+                    AnyNumberOf::new(vec![
+                        Ref::new("ExpressionSegment").to_matchable(),
+                    ])
+                    .config(|this| {
+                        this.reset_terminators = true;
+                        this.min_times = 1;
+                        this.max_times = Some(1);
+                    })
+                    .to_matchable(),
                     MetaSegment::dedent().to_matchable(),
                 ])
                 .to_matchable()
