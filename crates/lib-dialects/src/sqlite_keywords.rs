@@ -189,6 +189,20 @@ pub(crate) const UNRESERVED_KEYWORDS: &[&str] = &[
     "INTERVAL",
     "TIME",
     "TIMESTAMP",
+    // Common aggregate / scalar function names. Sqlite has no reserved-word
+    // notion of "function name", but registering these as identifiers lets
+    // the inherited `BareFunctionSegment` / function-call grammar recognise
+    // them as functions rather than bare identifiers — without this, layout
+    // rules insert a space before the `(` (e.g. `COUNT (x)`) and adjacency
+    // for `||` inside the call breaks (e.g. `year | | '-' | | month`).
+    "AVG",
+    "COALESCE",
+    "COUNT",
+    "INSTR",
+    "MAX",
+    "MIN",
+    "SUBSTR",
+    "SUM",
     "ROWID",
     "YES",
     "OFF",
