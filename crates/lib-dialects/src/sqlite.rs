@@ -44,6 +44,21 @@ pub fn raw_dialect() -> Dialect {
         "single_quote",
     );
 
+    // SQLite supports `$NNN` positional parameters (see
+    // https://sqlite.org/lang_expr.html#varparam). This is the form sqlx
+    // compiles to when binding arguments, so it needs to lex as a single token
+    // rather than falling apart into `$`, `N`, NN... which breaks adjacency
+    // for comparison operators like `!=` in `WHERE col != $1`.
+    // Inserted before `word` so the identifier lexer doesn't consume the `$`.
+    sqlite_dialect.insert_lexer_matchers(
+        vec![Matcher::regex(
+            "dollar_numeric_literal",
+            r"\$\d+",
+            SyntaxKind::DollarNumericLiteral,
+        )],
+        "word",
+    );
+
     sqlite_dialect.sets_mut("reserved_keywords").clear();
     sqlite_dialect
         .sets_mut("reserved_keywords")
@@ -79,13 +94,26 @@ pub fn raw_dialect() -> Dialect {
                 .to_matchable()
                 .into(),
         ),
-        // Extend LiteralGrammar to include blob literals
+        // SQLite `$NNN` positional parameter, matching the lexer token above.
+        (
+            "DollarNumericLiteralSegment".into(),
+            TypedParser::new(
+                SyntaxKind::DollarNumericLiteral,
+                SyntaxKind::DollarNumericLiteral,
+            )
+            .to_matchable()
+            .into(),
+        ),
+        // Extend LiteralGrammar to include blob literals and $NNN parameters.
         (
             "LiteralGrammar".into(),
             sqlite_dialect
                 .grammar("LiteralGrammar")
                 .copy(
-                    Some(vec![Ref::new("BytesQuotedLiteralSegment").to_matchable()]),
+                    Some(vec![
+                        Ref::new("BytesQuotedLiteralSegment").to_matchable(),
+                        Ref::new("DollarNumericLiteralSegment").to_matchable(),
+                    ]),
                     None,
                     None,
                     None,
