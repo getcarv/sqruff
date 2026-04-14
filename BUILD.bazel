@@ -6,7 +6,7 @@ load("@rules_rust//rust:defs.bzl", "rust_clippy", "rustfmt_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_shellcheck//:def.bzl", "shellcheck_test")
-load(":cargo_build.bzl", "cargo_run", "cargo_test", "cargo_vendor", "cargo_vendor_provider", "python_venv", "python_venv_provider")
+load(":cargo_build.bzl", "cargo_run", "cargo_test", "cargo_vendor", "cargo_vendor_provider", "python_venv", "python_venv_provider", "uv_python_install", "uv_python_venv")
 
 # Link all npm packages into node_modules
 npm_link_all_packages(name = "node_modules")
@@ -223,7 +223,7 @@ filegroup(
 cargo_vendor(
     name = "cargo_vendor",
     manifests = [":cargo_srcs"],
-    rust_version = "1.93.1",
+    rust_version = "1.94.1",
     components = [
         "clippy",
         "rustfmt",
@@ -417,7 +417,11 @@ cargo_test(
 
 # Run cargo tests (same as GitHub Action)
 cargo test --manifest-path ./crates/cli/Cargo.toml --locked --offline
-cargo test --all --all-features --exclude sqruff --locked --offline
+# Crates that don't need the Python/maturin setup run natively via rust_test:
+#   //crates/lib-core:sqruff-lib-core-test
+#   //crates/sqlinference:sqruff-sqlinference-test
+#   //crates/lineage:lineage-test
+cargo test --all --all-features --exclude sqruff --exclude sqruff-lib-core --exclude sqruff-sqlinference --exclude lineage --locked --offline
 """,
 )
 
@@ -502,22 +506,63 @@ copy_to_directory(
     },
 )
 
-# Python tests using uv - run for each Python version
+# Verify .sqlfluff-sha points to a real commit in sqlfluff/sqlfluff
+sh_test(
+    name = "verify_sqlfluff_sha",
+    size = "small",
+    srcs = [".hacking/scripts/verify_sqlfluff_sha.sh"],
+    data = [".sqlfluff-sha"],
+    tags = ["requires-network"],
+)
+
+# Python tests using uv - three incremental cached steps per version:
+# 1. uv_python_install: download and cache the Python runtime (re-runs only when version changes)
+# 2. uv_python_venv: sync dependencies into a cached venv (re-runs only when pyproject.toml/uv.lock change)
+# 3. sh_test: run pytest using the cached venv (runs every time)
+[
+    uv_python_install(
+        name = "pytest_py{}_python".format(version.replace(".", "")),
+        python_version = version,
+        uv = ["@uv//:uv"],
+    )
+    for version in [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+    ]
+]
+
+[
+    uv_python_venv(
+        name = "pytest_py{}_venv".format(version.replace(".", "")),
+        srcs = [
+            "pyproject.toml",
+            "uv.lock",
+        ],
+        python = [":pytest_py{}_python".format(version.replace(".", ""))],
+        uv = ["@uv//:uv"],
+    )
+    for version in [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+    ]
+]
+
 [
     sh_test(
         name = "pytest_py{}".format(version.replace(".", "")),
         size = "large",
         srcs = [".hacking/scripts/pytest_uv.sh"],
         data = [
-            "pyproject.toml",
-            "uv.lock",
+            ":pytest_py{}_venv".format(version.replace(".", "")),
             "//crates/cli-python:python_srcs",
             "//crates/cli-python:test_fixtures",
-            "@uv//:uv",
         ],
         env = {
-            "UV": "$(rlocationpath @uv//:uv)",
-            "PYTHON_VERSION": version,
+            "PYTHON_VENV": "$(rlocationpath :pytest_py{}_venv)".format(version.replace(".", "")),
         },
         tags = ["exclusive"],
     )

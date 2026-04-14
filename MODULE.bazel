@@ -12,7 +12,7 @@ tools = use_extension("//:tools.bzl", "tools")
 use_repo(tools, "cargo_hack", "cargo_machete", "ratchet", "uv")
 
 bazel_dep(name = "aspect_rules_js", version = "2.9.1")
-bazel_dep(name = "rules_nodejs", version = "6.6.2")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
 bazel_dep(name = "rules_playwright", version = "0.5.3")
 bazel_dep(name = "rules_python", version = "1.8.3")
 
@@ -26,7 +26,7 @@ use_repo(python, "python_3_12", "python_versions")
 
 register_toolchains("@python_versions//:all")
 
-bazel_dep(name = "aspect_rules_lint", version = "1.13.0")
+bazel_dep(name = "aspect_rules_lint", version = "2.3.0")
 bazel_dep(name = "rules_rust", version = "0.68.1")
 bazel_dep(name = "rules_rust_wasm_bindgen", version = "0.68.1")
 bazel_dep(name = "rules_shell", version = "0.6.1")
@@ -38,12 +38,23 @@ node.toolchain(node_version = "22.12.0")
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
 npm.npm_translate_lock(
     name = "npm",
+    custom_postinstalls = {
+        # code-server's postinstall creates dangling symlinks in lib/vscode that
+        # Bazel rejects in tree artifacts. Remove them after install.
+        "code-server": "find . -type l ! -exec test -e {} \\; -delete 2>/dev/null || true",
+    },
     data = [
         "//:package.json",
         "//:pnpm-workspace.yaml",
         "//editors/code:package.json",
         "//playground:package.json",
     ],
+    lifecycle_hooks_envs = {
+        "code-server": ["npm_config_user_agent=npm/10.0.0 node/v22.0.0"],
+    },
+    lifecycle_hooks_execution_requirements = {
+        "code-server": ["no-sandbox"],
+    },
     pnpm_lock = "//:pnpm-lock.yaml",
 )
 use_repo(npm, "npm")
@@ -68,7 +79,7 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = ["wasm32-unknown-unknown"],
-    versions = ["1.93.1"],
+    versions = ["1.94.1"],
 )
 use_repo(rust, "rust_toolchains")
 

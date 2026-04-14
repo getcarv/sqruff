@@ -5,7 +5,7 @@ use crate::core::rules::noqa::IgnoreMask;
 use hashbrown::HashSet;
 use sqruff_lib_core::errors::SQLBaseError;
 use sqruff_lib_core::parser::segments::fix::FixPatch;
-use sqruff_lib_core::templaters::{RawFileSlice, TemplatedFile};
+use sqruff_lib_core::templaters::{RawFileSlice, TemplateSliceKind, TemplatedFile};
 
 #[derive(Debug, Default, Clone)]
 pub struct LintedFile {
@@ -121,15 +121,37 @@ impl LintedFile {
 
     fn generate_source_patches(
         patches: Vec<FixPatch>,
-        _templated_file: &TemplatedFile,
+        templated_file: &TemplatedFile,
     ) -> Vec<FixPatch> {
         let mut filtered_source_patches = Vec::new();
         let mut dedupe_buffer: HashSet<Range<usize>> = HashSet::new();
 
         for patch in patches {
-            if dedupe_buffer.insert(patch.dedupe_tuple()) {
+            if !dedupe_buffer.insert(patch.dedupe_tuple()) {
+                continue;
+            }
+
+            // Check which raw slices this patch spans.
+            let local_raw_slices =
+                templated_file.raw_slices_spanning_source_slice(&patch.source_slice);
+            let all_literal = local_raw_slices.is_empty()
+                || local_raw_slices
+                    .iter()
+                    .all(|s| s.has_slice_kind(TemplateSliceKind::Literal));
+
+            if all_literal {
+                // Patch only touches literal source — safe to apply.
+                filtered_source_patches.push(patch);
+            } else if patch.is_source_fix() {
+                // Explicit source fix (e.g. jinja tag spacing) — always keep.
+                filtered_source_patches.push(patch);
+            } else if patch.is_zero_length_source()
+                && patch.source_slice.start == local_raw_slices[0].source_idx
+            {
+                // Zero-length insertion exactly at a raw slice boundary — safe.
                 filtered_source_patches.push(patch);
             }
+            // Otherwise: patch spans template boundaries — skip it.
         }
 
         filtered_source_patches.sort_by_key(|x| x.source_slice.start);
@@ -227,7 +249,7 @@ mod test {
     fn test_linted_file_build_up_fixed_source_string() {
         let tests = [
             // Trivial example
-            (vec![0..1], vec![], "a", "a"),
+            (std::iter::once(0..1).collect(), vec![], "a", "a"),
             // Simple replacement
             (
                 vec![0..1, 1..2, 2..3],
@@ -295,7 +317,7 @@ mod test {
                 vec![],
                 vec![],
                 "a",
-                vec![0..1],
+                std::iter::once(0..1).collect(),
             ),
             (
                 // Simple replacement.
@@ -320,7 +342,7 @@ mod test {
                 vec![],
                 vec![],
                 "a {{ b }} c",
-                vec![0..11],
+                std::iter::once(0..11).collect(),
             ),
             (
                 // Templated example with a source-only slice.
@@ -332,13 +354,13 @@ mod test {
                 vec![],
                 vec![RawFileSlice::new(
                     "{# b #}".into(),
-                    "comment".into(),
+                    TemplateSliceKind::Comment,
                     2,
                     None,
                     None,
                 )],
                 "a {# b #} c",
-                vec![0..11],
+                std::iter::once(0..11).collect(),
             ),
             (
                 // Templated fix example with a source-only slice.
@@ -354,7 +376,7 @@ mod test {
                 )],
                 vec![RawFileSlice::new(
                     "{# b #}".into(),
-                    "comment".into(),
+                    TemplateSliceKind::Comment,
                     1,
                     None,
                     None,
@@ -377,7 +399,7 @@ mod test {
                 )],
                 vec![RawFileSlice::new(
                     "{# b #}".into(),
-                    "comment".into(),
+                    TemplateSliceKind::Comment,
                     1,
                     None,
                     None,
@@ -400,7 +422,7 @@ mod test {
                 )],
                 vec![RawFileSlice::new(
                     "{# b #}".into(),
-                    "comment".into(),
+                    TemplateSliceKind::Comment,
                     2,
                     None,
                     None,
@@ -440,8 +462,20 @@ mod test {
                     ),
                 ],
                 vec![
-                    RawFileSlice::new("{%+if true-%}".into(), "block_start".into(), 14, None, None),
-                    RawFileSlice::new("{%-endif%}".into(), "block_end".into(), 43, None, None),
+                    RawFileSlice::new(
+                        "{%+if true-%}".into(),
+                        TemplateSliceKind::BlockStart,
+                        14,
+                        None,
+                        None,
+                    ),
+                    RawFileSlice::new(
+                        "{%-endif%}".into(),
+                        TemplateSliceKind::BlockEnd,
+                        43,
+                        None,
+                        None,
+                    ),
                 ],
                 "SELECT 1 from {%+if true-%} {{ref('foo')}} {%-endif%}",
                 vec![0..14, 14..27, 27..28, 28..42, 42..43, 43..53],
@@ -470,14 +504,26 @@ mod test {
             "<testing>".into(),
             Some("abc".into()),
             Some(vec![
-                TemplatedFileSlice::new("comment", 0..10, 0..0),
-                TemplatedFileSlice::new("templated", 10..19, 0..1),
-                TemplatedFileSlice::new("literal", 19..21, 1..3),
+                TemplatedFileSlice::new(TemplateSliceKind::Comment, 0..10, 0..0),
+                TemplatedFileSlice::new(TemplateSliceKind::Templated, 10..19, 0..1),
+                TemplatedFileSlice::new(TemplateSliceKind::Literal, 19..21, 1..3),
             ]),
             Some(vec![
-                RawFileSlice::new("{# blah #}".into(), "comment".into(), 0, None, None),
-                RawFileSlice::new("{{ foo }}".into(), "templated".into(), 10, None, None),
-                RawFileSlice::new("bc".into(), "literal".into(), 19, None, None),
+                RawFileSlice::new(
+                    "{# blah #}".into(),
+                    TemplateSliceKind::Comment,
+                    0,
+                    None,
+                    None,
+                ),
+                RawFileSlice::new(
+                    "{{ foo }}".into(),
+                    TemplateSliceKind::Templated,
+                    10,
+                    None,
+                    None,
+                ),
+                RawFileSlice::new("bc".into(), TemplateSliceKind::Literal, 19, None, None),
             ]),
         )
         .unwrap()

@@ -22,6 +22,8 @@ The following rules are available in this create. This list is generated from th
 | AM05 | [ambiguous.join](#ambiguousjoin) | Join clauses should be fully qualified. | 
 | AM06 | [ambiguous.column_references](#ambiguouscolumn_references) | Inconsistent column references in 'GROUP BY/ORDER BY' clauses. | 
 | AM07 | [ambiguous.set_columns](#ambiguousset_columns) | All queries in set expression should return the same number of columns. | 
+| AM08 | [ambiguous.join_condition](#ambiguousjoin_condition) | Implicit cross join detected. | 
+| AM09 | [ambiguous.order_by_limit](#ambiguousorder_by_limit) | LIMIT/OFFSET without ORDER BY. | 
 | CP01 | [capitalisation.keywords](#capitalisationkeywords) | Inconsistent capitalisation of keywords. | 
 | CP02 | [capitalisation.identifiers](#capitalisationidentifiers) | Inconsistent capitalisation of unquoted identifiers. | 
 | CP03 | [capitalisation.functions](#capitalisationfunctions) | Inconsistent capitalisation of function names. | 
@@ -38,6 +40,7 @@ The following rules are available in this create. This list is generated from th
 | CV09 | [convention.blocked_words](#conventionblocked_words) | Block a list of configurable words from being used. | 
 | CV10 | [convention.quoted_literals](#conventionquoted_literals) | Consistent usage of preferred quotes for quoted literals. | 
 | CV11 | [convention.casting_style](#conventioncasting_style) | Enforce consistent type casting style. | 
+| CV12 | [convention.join_condition](#conventionjoin_condition) | Join conditions should use the JOIN ... ON syntax. | 
 | JJ01 | [jinja.padding](#jinjapadding) | Jinja tags should have a single whitespace on either side. | 
 | LT01 | [layout.spacing](#layoutspacing) | Inappropriate Spacing. | 
 | LT02 | [layout.indent](#layoutindent) | Incorrect Indentation. | 
@@ -69,6 +72,9 @@ The following rules are available in this create. This list is generated from th
 | ST07 | [structure.using](#structureusing) | Prefer specifying join keys instead of using ``USING``. | 
 | ST08 | [structure.distinct](#structuredistinct) | Looking for DISTINCT before a bracket | 
 | ST09 | [structure.join_condition_order](#structurejoin_condition_order) | Joins should list the table referenced earlier/later first. | 
+| ST10 | [structure.constant_expression](#structureconstant_expression) | Redundant constant expression. | 
+| ST11 | [structure.unused_join](#structureunused_join) | Joined table not referenced in query. | 
+| ST12 | [structure.consecutive_semicolons](#structureconsecutive_semicolons) | Remove consecutive semicolons. | 
 
 ## Rule Details
 
@@ -484,7 +490,7 @@ UNION DISTINCT
 SELECT a, b FROM table_2
 ```
 
-**Dialects where this rule is skipped:** `bigquery`, `postgres`, `snowflake`, `clickhouse`, `sparksql`, `duckdb`
+**Dialects where this rule is skipped:** `bigquery`, `clickhouse`, `duckdb`, `postgres`, `snowflake`, `sparksql`
 
 ### ambiguous.order_by
 
@@ -679,6 +685,71 @@ SELECT
     c,
     d
 FROM t
+```
+
+
+### ambiguous.join_condition
+
+Implicit cross join detected.
+
+**Code:** `AM08`
+
+**Groups:** `all`, `ambiguous`
+
+**Fixable:** Yes
+
+**Anti-pattern**
+
+Cross joins are valid, but rare in the wild - and more often created by mistake than on purpose. This rule catches situations where a cross join has been specified, but not explicitly and so the risk of a mistaken cross join is highly likely.
+
+```sql
+SELECT
+    foo
+FROM bar
+JOIN baz;
+```
+
+**Best practice**
+
+Use `CROSS JOIN`.
+
+```sql
+SELECT
+    foo
+FROM bar
+CROSS JOIN baz;
+```
+
+
+### ambiguous.order_by_limit
+
+LIMIT/OFFSET without ORDER BY.
+
+**Code:** `AM09`
+
+**Groups:** `all`, `ambiguous`
+
+**Fixable:** No
+
+**Anti-pattern**
+
+Using `LIMIT` or `OFFSET` without `ORDER BY` leads to non-deterministic results, as the database may return different rows on successive executions.
+
+```sql
+SELECT *
+FROM foo
+LIMIT 10;
+```
+
+**Best practice**
+
+Always use `ORDER BY` when using `LIMIT` or `OFFSET`.
+
+```sql
+SELECT *
+FROM foo
+ORDER BY id
+LIMIT 10;
 ```
 
 
@@ -1254,6 +1325,40 @@ SELECT
     CAST(CAST(100 AS int) AS text),
     CAST(10 AS text) AS coo
 FROM foo;
+```
+
+
+### convention.join_condition
+
+Join conditions should use the JOIN ... ON syntax.
+
+**Code:** `CV12`
+
+**Groups:** `all`, `convention`
+
+**Fixable:** No
+
+**Anti-pattern**
+
+Placing join conditions in the `WHERE` clause instead of using `JOIN ... ON` mixes join logic with filtering logic, making queries harder to read.
+
+```sql
+SELECT
+    foo
+FROM bar
+JOIN baz
+WHERE bar.id = baz.id;
+```
+
+**Best practice**
+
+Use `JOIN ... ON` to specify join conditions.
+
+```sql
+SELECT
+    foo
+FROM bar
+JOIN baz ON bar.id = baz.id;
 ```
 
 
@@ -1941,7 +2046,7 @@ SELECT
 FROM foo
 ```
 
-**Dialects where this rule is skipped:** `athena`, `redshift`, `bigquery`, `databricks`, `duckdb`, `sparksql`
+**Dialects where this rule is skipped:** `athena`, `bigquery`, `databricks`, `duckdb`, `redshift`, `sparksql`
 
 ### references.qualification
 
@@ -2461,7 +2566,7 @@ Joins should list the table referenced earlier/later first.
 
 **Groups:** `all`, `structure`
 
-**Fixable:** No
+**Fixable:** Yes
 
 **Anti-pattern**
 
@@ -2496,5 +2601,103 @@ from foo
 left join bar
     on foo.a = bar.a
     and foo.b = bar.b
+```
+
+
+### structure.constant_expression
+
+Redundant constant expression.
+
+**Code:** `ST10`
+
+**Groups:** `all`, `structure`
+
+**Fixable:** No
+
+Including an expression that always evaluates to either `TRUE` or `FALSE`
+regardless of the input columns is unnecessary and makes statements harder
+to read and understand.
+
+**Anti-pattern**
+
+```sql
+SELECT *
+FROM my_table
+-- This following WHERE clause is redundant.
+WHERE my_table.col = my_table.col
+```
+
+**Best practice**
+
+```sql
+SELECT *
+FROM my_table
+-- Replace with a condition that includes meaningful logic,
+-- or remove the condition entirely.
+WHERE my_table.col > 3
+```
+
+
+### structure.unused_join
+
+Joined table not referenced in query.
+
+**Code:** `ST11`
+
+**Groups:** `all`, `structure`
+
+**Fixable:** No
+
+**Anti-pattern**
+
+In this example, the table ``bar`` is included in the ``JOIN`` clause
+but no columns from it are referenced elsewhere in the query.
+
+```sql
+SELECT
+    foo.a,
+    foo.b
+FROM foo
+LEFT JOIN bar ON foo.a = bar.a
+```
+
+**Best practice**
+
+Remove the join, or use the table.
+
+```sql
+SELECT
+    foo.a,
+    foo.b,
+    bar.c
+FROM foo
+LEFT JOIN bar ON foo.a = bar.a
+```
+
+
+### structure.consecutive_semicolons
+
+Remove consecutive semicolons.
+
+**Code:** `ST12`
+
+**Groups:** `all`, `structure`
+
+**Fixable:** Yes
+
+**Anti-pattern**
+
+Multiple semicolons in a row, with only whitespace between them.
+
+```sql
+SELECT 1;;
+```
+
+**Best practice**
+
+Use only a single semicolon.
+
+```sql
+SELECT 1;
 ```
 

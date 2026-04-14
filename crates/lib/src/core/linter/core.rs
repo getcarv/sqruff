@@ -6,14 +6,13 @@ use std::sync::{Arc, OnceLock};
 
 use crate::Formatter;
 use crate::core::config::FluffConfig;
-use crate::core::linter::common::{ParsedString, RenderedFile};
+use crate::core::linter::common::{BatchRenderedResult, ParsedString, RenderedFile};
 use crate::core::linter::linted_file::LintedFile;
 use crate::core::linter::linting_result::LintingResult;
 use crate::core::rules::noqa::IgnoreMask;
 use crate::core::rules::{ErasedRule, Exception, LintPhase, RulePack};
 use crate::rules::get_ruleset;
-use crate::templaters::raw::RawTemplater;
-use crate::templaters::{ProcessingMode, TEMPLATERS, Templater};
+use crate::templaters::{ProcessingMode, Templater, TemplaterKind};
 use hashbrown::{HashMap, HashSet};
 use itertools::Itertools;
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
@@ -61,21 +60,7 @@ impl Linter {
     }
 
     pub fn get_templater(config: &FluffConfig) -> Result<&'static dyn Templater, String> {
-        let templater_name = config.get("templater", "core").as_string();
-        match templater_name {
-            Some(name) => match TEMPLATERS.into_iter().find(|t| t.name() == name) {
-                Some(t) => Ok(t),
-                None => {
-                    let available: Vec<&str> = TEMPLATERS.iter().map(|t| t.name()).collect();
-                    Err(format!(
-                        "Unknown templater '{}'. Available templaters: {}",
-                        name,
-                        available.join(", ")
-                    ))
-                }
-            },
-            None => Ok(&RawTemplater),
-        }
+        config.templater_kind().map(TemplaterKind::templater)
     }
 
     /// Lint strings directly.
@@ -179,9 +164,18 @@ impl Linter {
             ProcessingMode::Batch => {
                 // Use batch processing for templaters that support it (e.g., dbt).
                 // This allows sharing expensive initialization (manifest loading) across files.
-                let rendered_files = self.render_files_batch(&paths);
-                for rendered in rendered_files {
-                    files.push(self.lint_rendered(rendered, fix)?);
+                let batch_results = self.render_files_batch(&paths);
+                for result in batch_results {
+                    match result {
+                        BatchRenderedResult::Rendered(rendered) => {
+                            files.push(self.lint_rendered(rendered, fix)?);
+                        }
+                        BatchRenderedResult::Skipped { filename, reason } => {
+                            if let Some(formatter) = &self.formatter {
+                                formatter.dispatch_file_skip(&filename, &reason);
+                            }
+                        }
+                    }
                 }
             }
             ProcessingMode::Sequential => {
@@ -230,7 +224,7 @@ impl Linter {
     ///
     /// This is more efficient for templaters like dbt that have expensive
     /// initialization (manifest loading) that can be shared across files.
-    pub fn render_files_batch(&self, fnames: &[String]) -> Vec<RenderedFile> {
+    pub fn render_files_batch(&self, fnames: &[String]) -> Vec<BatchRenderedResult> {
         if fnames.is_empty() {
             return Vec::new();
         }
@@ -242,7 +236,7 @@ impl Linter {
                 .iter()
                 .map(|fname| {
                     let source_str = std::fs::read_to_string(fname).unwrap_or_default();
-                    RenderedFile {
+                    BatchRenderedResult::Rendered(RenderedFile {
                         templated_file: TemplatedFile::new(
                             source_str.clone(),
                             fname.clone(),
@@ -254,7 +248,7 @@ impl Linter {
                         templater_violations: vec![],
                         filename: fname.clone(),
                         source_str,
-                    }
+                    })
                 })
                 .collect();
         }
@@ -280,24 +274,31 @@ impl Linter {
             .templater
             .process(&file_refs, &self.config, &self.formatter);
 
-        // Convert results to RenderedFiles
+        // Convert results to BatchRenderedResults, preserving order
         results
             .into_iter()
             .zip(files.iter())
             .map(|(result, (source_str, fname))| match result {
-                Ok(templated_file) => RenderedFile {
+                Ok(templated_file) => BatchRenderedResult::Rendered(RenderedFile {
                     templated_file,
                     templater_violations: vec![],
                     filename: fname.clone(),
                     source_str: source_str.clone(),
-                },
+                }),
                 Err(err) => {
+                    let err_str = err.to_string();
+                    if let Some(reason) = err_str.strip_prefix("SKIP:") {
+                        return BatchRenderedResult::Skipped {
+                            filename: fname.clone(),
+                            reason: reason.to_string(),
+                        };
+                    }
                     log::error!("Failed to template file {}: {:?}", fname, err);
                     // Return a minimal RenderedFile with the templater error as a
                     // violation. This prevents linting the raw source (which contains
                     // template syntax like {{ }}) and producing false positive LT01
                     // spacing errors.
-                    RenderedFile {
+                    BatchRenderedResult::Rendered(RenderedFile {
                         templated_file: TemplatedFile::new(
                             source_str.clone(),
                             fname.clone(),
@@ -311,7 +312,7 @@ impl Linter {
                         ))],
                         filename: fname.clone(),
                         source_str: source_str.clone(),
-                    }
+                    })
                 }
             })
             .collect()
@@ -863,6 +864,19 @@ mod tests {
     use crate::core::config::FluffConfig;
     use crate::core::linter::core::Linter;
 
+    fn postgres_all_rules_linter() -> Linter {
+        let config = FluffConfig::from_source(
+            r#"
+[sqruff]
+dialect = postgres
+rules = all
+"#,
+            None,
+        );
+
+        Linter::new(config, None, None, true).unwrap()
+    }
+
     fn normalise_paths(paths: Vec<String>) -> Vec<String> {
         paths
             .into_iter()
@@ -1080,5 +1094,89 @@ mod tests {
             !violations.iter().any(|v| v.rule_code() == "LT01"),
             "Should not have LT01 false positives on template syntax"
         );
+    }
+
+    #[test]
+    fn test_postgres_case_else_concat_does_not_raise_lt01_and_fixes_cleanly() {
+        let sql = r#"select case
+      when a = 1 then 'one'
+      when a = 2 then 'two'
+  else 'other' || 's'
+    end as b
+from test;
+"#;
+        let expected = r#"select
+    case
+        when a = 1 then 'one'
+        when a = 2 then 'two'
+        else 'other' || 's'
+    end as b
+from test;
+"#;
+
+        let mut linter = postgres_all_rules_linter();
+        let linted = linter.lint_string_wrapped(sql, false).unwrap();
+        let violations = linted.violations();
+
+        assert!(
+            !violations.iter().any(|v| v.rule_code() == "LT01"),
+            "Expected no LT01 violations, got: {:?}",
+            violations
+                .iter()
+                .map(|v| (v.rule_code(), v.desc().to_string()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            violations.iter().all(|v| v.rule_code() == "LT02"),
+            "Expected only LT02 violations, got: {:?}",
+            violations
+                .iter()
+                .map(|v| (v.rule_code(), v.desc().to_string()))
+                .collect::<Vec<_>>()
+        );
+
+        let fixed = postgres_all_rules_linter()
+            .lint_string_wrapped(sql, true)
+            .unwrap()
+            .fix_string();
+
+        assert_eq!(fixed, expected);
+    }
+
+    #[test]
+    fn test_postgres_case_else_binary_operator_spacing_still_triggers_lt01() {
+        let sql = r#"select case
+      when a = 1 then 'one'
+  else 1+2
+    end as b
+from test;
+"#;
+        let expected = r#"select
+    case
+        when a = 1 then 'one'
+        else 1 + 2
+    end as b
+from test;
+"#;
+
+        let mut linter = postgres_all_rules_linter();
+        let linted = linter.lint_string_wrapped(sql, false).unwrap();
+        let violations = linted.violations();
+
+        assert!(
+            violations.iter().any(|v| v.rule_code() == "LT01"),
+            "Expected LT01 violations, got: {:?}",
+            violations
+                .iter()
+                .map(|v| (v.rule_code(), v.desc().to_string()))
+                .collect::<Vec<_>>()
+        );
+
+        let fixed = postgres_all_rules_linter()
+            .lint_string_wrapped(sql, true)
+            .unwrap()
+            .fix_string();
+
+        assert_eq!(fixed, expected);
     }
 }
