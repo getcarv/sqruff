@@ -181,6 +181,14 @@ pub(crate) const UNRESERVED_KEYWORDS: &[&str] = &[
     "BOOLEAN",
     "DATE",
     "DATETIME",
+    // Not part of SQLite syntax (sqlite stores datetimes as strings/numerics),
+    // but referenced by the ansi-inherited DateTimeLiteralGrammar via
+    // `Ref::keyword`. Without registering them as identifiers in the dialect's
+    // keyword library, certain parse paths panic at runtime with
+    // "Grammar refers to '<name>' which was not found in the dialect."
+    "INTERVAL",
+    "TIME",
+    "TIMESTAMP",
     "ROWID",
     "YES",
     "OFF",
