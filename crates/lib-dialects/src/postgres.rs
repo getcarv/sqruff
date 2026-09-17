@@ -330,6 +330,11 @@ pub fn raw_dialect() -> Dialect {
             r#"->>|#>>|->|#>|@>|<@|\?\|_|\?|\?&|#-"#,
             SyntaxKind::JsonOperator
         ),
+        Matcher::regex(
+            "full_text_search_operator",
+            r#"@@@|@@"#,
+            SyntaxKind::FullTextSearchOperator
+        ),
         Matcher::string(
             "at",
             "@",
@@ -428,6 +433,12 @@ pub fn raw_dialect() -> Dialect {
         (
             "JsonOperatorSegment".into(),
             TypedParser::new(SyntaxKind::JsonOperator, SyntaxKind::BinaryOperator)
+                .to_matchable()
+                .into(),
+        ),
+        (
+            "FullTextSearchOperatorSegment".into(),
+            TypedParser::new(SyntaxKind::FullTextSearchOperator, SyntaxKind::BinaryOperator)
                 .to_matchable()
                 .into(),
         ),
@@ -790,6 +801,7 @@ pub fn raw_dialect() -> Dialect {
                 Ref::new("BooleanBinaryOperatorGrammar").to_matchable(),
                 Ref::new("ComparisonOperatorGrammar").to_matchable(),
                 Ref::new("JsonOperatorSegment").to_matchable(),
+                Ref::new("FullTextSearchOperatorSegment").to_matchable(),
             ])
             .to_matchable()
             .into(),
