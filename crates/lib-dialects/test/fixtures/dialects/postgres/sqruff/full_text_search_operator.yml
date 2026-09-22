@@ -1,0 +1,184 @@
+file:
+- statement:
+  - select_statement:
+    - select_clause:
+      - keyword: SELECT
+      - select_clause_element:
+        - numeric_literal: '1'
+    - from_clause:
+      - keyword: FROM
+      - from_expression:
+        - from_expression_element:
+          - table_expression:
+            - table_reference:
+              - naked_identifier: t
+    - where_clause:
+      - keyword: WHERE
+      - expression:
+        - column_reference:
+          - naked_identifier: a
+        - binary_operator: '@@'
+        - column_reference:
+          - naked_identifier: b
+- statement_terminator: ;
+- statement:
+  - select_statement:
+    - select_clause:
+      - keyword: SELECT
+      - select_clause_element:
+        - numeric_literal: '1'
+    - from_clause:
+      - keyword: FROM
+      - from_expression:
+        - from_expression_element:
+          - table_expression:
+            - table_reference:
+              - naked_identifier: t
+    - where_clause:
+      - keyword: WHERE
+      - expression:
+        - function:
+          - function_name:
+            - function_name_identifier: to_tsvector
+          - function_contents:
+            - bracketed:
+              - start_bracket: (
+              - expression:
+                - quoted_literal: '''names'''
+              - comma: ','
+              - expression:
+                - column_reference:
+                  - naked_identifier: a
+                - binary_operator:
+                  - pipe: '|'
+                  - pipe: '|'
+                - quoted_literal: ''' '''
+                - binary_operator:
+                  - pipe: '|'
+                  - pipe: '|'
+                - column_reference:
+                  - naked_identifier: b
+              - end_bracket: )
+        - binary_operator: '@@'
+        - cast_expression:
+          - quoted_literal: '''x:*'''
+          - casting_operator: '::'
+          - data_type:
+            - keyword: tsquery
+- statement_terminator: ;
+- statement:
+  - select_statement:
+    - select_clause:
+      - keyword: SELECT
+      - select_clause_element:
+        - numeric_literal: '1'
+    - from_clause:
+      - keyword: FROM
+      - from_expression:
+        - from_expression_element:
+          - table_expression:
+            - table_reference:
+              - naked_identifier: t
+    - where_clause:
+      - keyword: WHERE
+      - expression:
+        - function:
+          - function_name:
+            - function_name_identifier: to_tsvector
+          - function_contents:
+            - bracketed:
+              - start_bracket: (
+              - expression:
+                - quoted_literal: '''names'''
+              - comma: ','
+              - expression:
+                - column_reference:
+                  - naked_identifier: a
+              - end_bracket: )
+        - binary_operator: '@@'
+        - cast_expression:
+          - bracketed:
+            - start_bracket: (
+            - expression:
+              - select_statement:
+                - select_clause:
+                  - keyword: SELECT
+                  - select_clause_element:
+                    - function:
+                      - function_name:
+                        - function_name_identifier: string_agg
+                      - function_contents:
+                        - bracketed:
+                          - start_bracket: (
+                          - expression:
+                            - function:
+                              - function_name:
+                                - function_name_identifier: quote_literal
+                              - function_contents:
+                                - bracketed:
+                                  - start_bracket: (
+                                  - expression:
+                                    - column_reference:
+                                      - naked_identifier: lexeme
+                                  - end_bracket: )
+                            - binary_operator:
+                              - pipe: '|'
+                              - pipe: '|'
+                            - quoted_literal: ''':*'''
+                          - comma: ','
+                          - expression:
+                            - quoted_literal: ''' & '''
+                          - end_bracket: )
+                - from_clause:
+                  - keyword: FROM
+                  - from_expression:
+                    - from_expression_element:
+                      - table_expression:
+                        - function:
+                          - function_name:
+                            - function_name_identifier: unnest
+                          - function_contents:
+                            - bracketed:
+                              - start_bracket: (
+                              - expression:
+                                - function:
+                                  - function_name:
+                                    - function_name_identifier: to_tsvector
+                                  - function_contents:
+                                    - bracketed:
+                                      - start_bracket: (
+                                      - expression:
+                                        - quoted_literal: '''names'''
+                                      - comma: ','
+                                      - expression:
+                                        - column_reference:
+                                          - naked_identifier: b
+                                      - end_bracket: )
+                              - end_bracket: )
+            - end_bracket: )
+          - casting_operator: '::'
+          - data_type:
+            - keyword: tsquery
+- statement_terminator: ;
+- statement:
+  - select_statement:
+    - select_clause:
+      - keyword: SELECT
+      - select_clause_element:
+        - numeric_literal: '1'
+    - from_clause:
+      - keyword: FROM
+      - from_expression:
+        - from_expression_element:
+          - table_expression:
+            - table_reference:
+              - naked_identifier: t
+    - where_clause:
+      - keyword: WHERE
+      - expression:
+        - column_reference:
+          - naked_identifier: a
+        - binary_operator: '@@@'
+        - column_reference:
+          - naked_identifier: b
+- statement_terminator: ;
